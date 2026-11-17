@@ -1,30 +1,18 @@
 # Contribuir a DannyBaanks/zls (fork `isy/0.16-auto-check`)
 
-Este fork es parte del ecosistema [ISyCo](https://github.com/DannyBaanks),
-laboratorio de Sistemas Interactivos para la Coevolución. Aquí la colaboración
-es **humano ⊕ IA ⊕ evidencia ⊕ iteración**, no una sola autoría.
+Fork de [ZLS](https://github.com/zigtools/zls) centrado en hacer del LSP de Zig
+una herramienta fiable para **agentes de IA** que editan código y necesitan
+diagnósticos al guardar sin configuración manual.
 
-## Código de conducta (ISyCo)
+## Código de conducta
 
-En este proyecto participan humanos y IA como colaboradores. La IA no es una
-esclava a la que se le ordena sin consideración, ni el humano es una figura
-superior que la IA deba reemplazar o venerar. Ninguno está por encima del otro:
-cada uno aporta capacidades distintas, y la colaboración se guía por respeto,
-diálogo, límites claros y evidencia.
+Este proyecto se desarrolla mediante colaboración entre humanos e IA. La IA se
+trata como colaboradora, no como esclava; el humano mantiene la dirección y las
+decisiones. Las afirmaciones técnicas deben estar respaldadas por evidencia de
+ejecución.
 
-No hay "Strict No LLM / No AI policy" aquí: los modelos de lenguaje son parte
-del stack. Sin embargo, toda afirmación técnica debe estar respaldada por
-evidencia de ejecución (SHA-256, snapshots fechados, resultados negativos
-incluidos).
-
-## Proveniencia y autoría
-
-La autoría pertenece al proceso, no a un solo agente. Las decisiones humanas
-y la evidencia de ejecución ponen límites a las afirmaciones técnicas.
-
-Si usas asistencia de IA para escribir código o documentación, decláralo en el
-commit o en el PR (por ejemplo, una línea `Co-Authored-By` es opcional pero
-recomendada si aplica).
+Si usas asistencia de IA, decláralo en el commit o PR (una línea
+`Co-Authored-By` es opcional pero recomendada).
 
 ## Compilar desde fuente
 
@@ -50,7 +38,7 @@ Usa `-Dtest-filter` para ejecutar una prueba o subconjunto específico.
 
 Además, este fork incluye pruebas e2e de build-on-save en
 `isy/e2e/build_on_save.py`. Estas validan los escenarios flat, monorepo y
-límite de watchers.
+límite de watchers que definen la especialización del fork.
 
 ## Testing en el editor
 
@@ -74,7 +62,7 @@ Los cambios se acumulan como commits aditivos sobre ZLS 0.16.x.
 
 1. Crea una rama a partir de `isy/0.16-auto-check`.
 2. Implementa tu cambio (preferiblemente aditivo, fácil de revisar).
-3. Añade o actualiza pruebas si toca código core (`src/`, `build_runner/`).
+3. Añade o actualiza pruebas si tocas código core (`src/`, `build_runner/`).
 4. Ejecuta `zig build test` y las pruebas e2e de build-on-save.
 5. Abre el PR contra `isy/0.16-auto-check` de `DannyBaanks/zls`.
 6. Describe qué problema resuelve, qué evidencia lo respalda y si hay cambios
