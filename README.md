@@ -1,61 +1,134 @@
 <img src="https://raw.githubusercontent.com/zigtools/zls/master/.github/assets/zls-opt.svg" alt="ZLS Logo" width=200>
 
 [![CI](https://github.com/zigtools/zls/actions/workflows/main.yml/badge.svg)](https://github.com/zigtools/zls/actions/workflows/main.yml)
-[![codecov](https://codecov.io/github/zigtools/zls/graph/badge.svg?token=WE18MPF00W)](https://codecov.io/github/zigtools/zls)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Discord](https://discord.com/api/guilds/997174129532866701/widget.png?style=shield)](https://discord.gg/5m5U3qpUhk)
 
-ZLS is a non-official implementation of the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/) for [Zig](https://ziglang.org/) in Zig. It provides developers with IDE [features](#features) in their editor.
+# ZLS — fork `isy/0.16-auto-check` (DannyBaanks/zls)
 
-## Installation
+LSP (Language Server Protocol) de [Zig](https://ziglang.org/) escrito en Zig.
+Proporciona funciones de IDE en tu editor: completados, hover, ir a definición,
+símbolos de documento, referencias, rename, formato, inlay hints, code actions,
+y más.
 
-The complete installation guide is available on the [Zigtools website](https://zigtools.org/zls/install/). It covers editor setup, prebuilt binaries and additional documentation.
+## ISyCo — Sistemas Interactivos para la Coevolución
+
+Este fork es el LSP de Zig usado dentro del ecosistema
+[ISyCo](https://github.com/DannyBaanks), un laboratorio de investigación de
+agentes de IA y motores de lenguaje.
+
+**Humano ↔ IA ↔ Evidencia** — resultados que nacen de iteraciones en conjunto,
+no de una sola autoría.
+
+Un experimento práctico: la dirección humana (preguntas, objetivos, restricciones
+y decisiones) se retroalimenta con implementaciones, análisis y artefactos
+generados por modelos. Cada evidencia obtenida en ejecución orienta la siguiente
+ronda.
+
+### Proveniencia
+
+- Humano ≠ ISyCo
+- IA ≠ ISyCo
+- Humano ⊕ IA ⊕ Evidencia ⊕ Iteración → ISyCo
+
+### Colaboración, no jerarquía
+
+El humano y la IA participan como colaboradores. La IA no es una esclava a la
+que se le ordena sin consideración, ni el humano es una figura superior a la que
+la IA deba reemplazar o venerar. Ninguno está por encima del otro: cada uno
+aporta capacidades distintas, y la colaboración se guía por respeto, diálogo,
+límites claros y evidencia.
+
+### Lo que importa
+
+- La autoría pertenece al proceso, no a un solo agente.
+- Las decisiones humanas y la evidencia de ejecución ponen límites a las
+  afirmaciones técnicas.
+- El objetivo es producir artefactos útiles, verificables y reproducibles
+  mediante la coevolución.
+
+## Especialización de este fork: agentes de IA
+
+Desde los commits de esta rama el foco se desplaza a:
+
+- **Build-on-save para proyectos anidados sin `build.zig`**: al abrir un
+  workspace cuyo root no tiene `build.zig`, ZLS busca el proyecto Zig más
+  cercano debajo y arranca build-on-save ahí. Nunca sube por encima del
+  workspace y saltea `zig-pkg/`, `.zig-cache/` y `zig-out/`.
+- **Límite de watchers**: máximo 4 watchers simultáneos (~50 MB idle cada uno,
+  medido en ZigGrep), parando el menos recientemente usado.
+- **Síntesis de paso `check`**: cuando un proyecto no tiene paso `check`,
+  ZLS lo sintetiza para poder reportar errores de compilación al guardar.
+- **Deduplicación de diagnósticos**: evita que el mismo error se reporte
+  múltiples veces en build-on-save.
+
+Estos cambios son **100 % aditivos** (442 líneas añadidas, 0 borradas) sobre
+ZLS 0.16.x. Ver `CONTRIBUTING.md` para detalles de cómo colaborar en este fork.
+
+## Instalación
+
+La guía completa de instalación está disponible en la [web de Zigtools](https://zigtools.org/zls/install/). Cubre configuración de editor, binarios precompilados y documentación adicional.
 
 ### Build From Source
 
-The default branch of ZLS targets [Zig master](https://ziglang.org/download/).
+La rama por defecto de ZLS apunta a [Zig master](https://ziglang.org/download/).
 
 ```bash
-git clone https://github.com/zigtools/zls
+git clone https://github.com/DannyBaanks/zls
 cd zls
+git checkout isy/0.16-auto-check
 zig build -Doptimize=ReleaseSafe
 ```
 
-When upgrading Zig, make sure to update ZLS too keep them in sync.
+Al actualizar Zig, asegúrate de actualizar ZLS también para mantenerlos sincronizados.
+
+El binario compilado queda en `zig-out/bin/zls`. En ISyCo se despliega como
+`~/.local/bin/zls`.
 
 ## Features
 
-ZLS supports most language features, including simple type function support, using namespace, payload capture type resolution, custom packages, cImport and others. Support for comptime and semantic analysis is Work-in-Progress.
+ZLS soporta la mayoría de las características del lenguaje, incluyendo soporte
+simple para funciones con tipo, `using namespace`, captura de payload, resolución
+de tipos, paquetes personalizados, `cImport` y otros. El soporte para `comptime`
+y análisis semántico es Work-in-Progress.
 
-The following LSP features are supported:
+Las siguientes características LSP están soportadas:
 
-- Completions
+- Completados
 - Hover
-- Goto definition/declaration
-- Document symbols
-- Find references
-- Rename symbol
-- Formatting using `zig fmt`
-- Semantic token highlighting
+- Ir a definición/declaración
+- Símbolos de documento
+- Buscar referencias
+- Rename de símbolo
+- Formateo usando `zig fmt`
+- Resaltado de tokens semánticos
 - Inlay hints
 - Code actions
-- Selection ranges
-- Folding regions
+- Rangos de selección
+- Regiones de plegado
 
-## Related Projects
+## Build-on-save en ISyCo
+
+En el ecosistema ISyCo, `~/.local/bin/zls` es este fork compilado. Al abrir un
+archivo `.zig`, el LSP crea `.zig-cache/` en el proyecto (regla T29 de ISyCo);
+este fork **no lo ignora en el `.gitignore` del repositorio principal**, así que
+no commitees `.zig-cache/` ni `zig-out/` si trabajas dentro de ISyCo.
+
+## Proyectos relacionados
 
 - [`sublime-zig-language` by @prime31](https://github.com/prime31/sublime-zig-language)
-  - Supports basic language features
-  - Uses data provided by `src/data` to perform builtin autocompletion
+  - Soporta características básicas del lenguaje
+  - Usa datos de `src/data` para autocompletado de builtins
 - [`zig-lsp` by @xackus](https://github.com/xackus/zig-lsp)
-  - Inspiration for ZLS
+  - Inspiración para ZLS
 - [`known-folders` by @ziglibs](https://github.com/ziglibs/known-folders)
-  - Provides API to access known folders on Linux, Windows and Mac OS
+  - Proporciona API para acceder a carpetas conocidas en Linux, Windows y Mac
 - [`zls` by @zigtools](https://github.com/zigtools/zls)
-  - Used by many ZLS developers to more efficiently work on ZLS
+  - Usado por muchos desarrolladores de ZLS para trabajar más eficientemente en ZLS
 
-## Quick Thanks :)
+## Licencia
 
-We'd like to take a second to thank all our awesome [contributors](https://github.com/zigtools/zls/graphs/contributors) and donators/backers/sponsors; if you have time or money to spare, consider partaking in either of these options - they help keep ZLS awesome for everyone!
+[MIT](LICENSE)
 
-[![OpenCollective Backers](https://opencollective.com/zigtools/backers.svg?width=890&limit=1000)](https://opencollective.com/zigtools#category-CONTRIBUTE)
+---
+
+<sub>Contenido serio. Encabezados no tanto.</sub>
