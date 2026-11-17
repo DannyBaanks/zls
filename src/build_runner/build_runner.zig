@@ -580,6 +580,10 @@ fn resolveStepNames(
             try starting_steps.put(gpa, &tls.step, {});
         } else if (!check_step_only) {
             try starting_steps.put(gpa, b.default_step, {});
+        } else if (try synthesizeCheckStep(b)) |synthetic| {
+            // ISY: most projects declare no "check" step, which left build-on-save silent
+            // (syntax-only diagnostics). Analyze every root-package artifact instead.
+            try starting_steps.put(gpa, synthetic, {});
         }
     } else {
         try starting_steps.ensureUnusedCapacity(gpa, step_names.len);
@@ -594,6 +598,59 @@ fn resolveStepNames(
     }
 
     return starting_steps;
+}
+
+/// ISY: builds the equivalent of a hand-written check step when the project has none.
+///
+/// For every `Step.Compile` owned by the root package and reachable from a top-level step,
+/// a twin is created that shares its `root_module` and `kind` but never requests its
+/// binary, so the compiler runs with `-fno-emit-bin` (semantic analysis only: no codegen,
+/// no linking, nothing installed). `Run` steps are never started; they only run if a
+/// twin's module graph genuinely depends on a file they generate.
+/// Returns null when the project has no compile steps.
+fn synthesizeCheckStep(b: *std.Build) Allocator.Error!?*Step {
+    const arena = b.allocator;
+
+    var visited: std.array_hash_map.Auto(*Step, void) = .empty;
+    try visited.ensureUnusedCapacity(arena, b.top_level_steps.count());
+    for (b.top_level_steps.values()) |tls| {
+        visited.putAssumeCapacity(&tls.step, {});
+    }
+
+    const Key = struct { module: *std.Build.Module, kind: Step.Compile.Kind };
+    var seen: std.array_hash_map.Auto(Key, void) = .empty;
+
+    var check: ?*Step = null;
+    var next_index: usize = 0;
+    while (next_index < visited.count()) : (next_index += 1) {
+        const step = visited.keys()[next_index];
+        try visited.ensureUnusedCapacity(arena, step.dependencies.items.len);
+        for (step.dependencies.items) |dependency| visited.putAssumeCapacity(dependency, {});
+
+        const compile = step.cast(Step.Compile) orelse continue;
+        if (compile.step.owner != b) continue; // dependency packages are not ours to check
+        const gop = try seen.getOrPut(arena, .{ .module = compile.root_module, .kind = compile.kind });
+        if (gop.found_existing) continue;
+
+        const twin = Step.Compile.create(b, .{
+            .name = compile.name,
+            .root_module = compile.root_module,
+            .kind = compile.kind,
+            .linkage = compile.linkage,
+            .use_llvm = compile.use_llvm,
+            .use_lld = compile.use_lld,
+            .zig_lib_dir = compile.zig_lib_dir,
+        });
+        assert(twin.generated_bin == null); // the invariant that makes this a check, not a build
+
+        if (check == null) {
+            const synthetic = try arena.create(Step);
+            synthetic.* = .init(.{ .id = .top_level, .name = "zls-synthetic-check", .owner = b });
+            check = synthetic;
+        }
+        check.?.dependOn(&twin.step);
+    }
+    return check;
 }
 
 fn prepare(
