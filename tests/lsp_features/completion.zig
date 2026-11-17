@@ -1250,8 +1250,8 @@ test "namespace" {
         \\const instance: namespace = undefined;
         \\const bar = instance.<cursor>
     , &.{
-        .{ .label = "beta", .kind = .Method, .detail = "fn (_: anytype) void" },
-        .{ .label = "gamma", .kind = .Method, .detail = "fn (_: namespace) void" },
+        .{ .label = "beta", .kind = .Function, .detail = "fn (_: anytype) void" },
+        .{ .label = "gamma", .kind = .Function, .detail = "fn (_: namespace) void" },
     });
     try testCompletion(
         \\fn alpha() void {}
@@ -1261,8 +1261,8 @@ test "namespace" {
         \\const foo: @This() = undefined;
         \\const bar = foo.<cursor>;
     , &.{
-        .{ .label = "beta", .kind = .Method, .detail = "fn (_: anytype) void" },
-        .{ .label = "gamma", .kind = .Method, .detail = "fn (_: Untitled-0) void" },
+        .{ .label = "beta", .kind = .Function, .detail = "fn (_: anytype) void" },
+        .{ .label = "gamma", .kind = .Function, .detail = "fn (_: Untitled-0) void" },
     });
 }
 
@@ -1379,22 +1379,6 @@ test "struct" {
     , &.{
         .{ .label = "alpha", .kind = .Field, .detail = "u32" },
         .{ .label = "beta", .kind = .Field, .detail = "[]const u8" },
-    });
-
-    try testCompletion(
-        \\const S = struct {
-        \\    alpha: u32,
-        \\    fn foo(self: S) void {
-        \\        self.<cursor>
-        \\    }
-        \\    fn optPtr(_: ?*S) void {}
-        \\    fn optValue(_: ?S) void {}
-        \\};
-    , &.{
-        .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-        .{ .label = "foo", .kind = .Method, .detail = "fn (self: S) void" },
-        .{ .label = "optPtr", .kind = .Method, .detail = "fn (_: ?*S) void" },
-        .{ .label = "optValue", .kind = .Method, .detail = "fn (_: ?S) void" },
     });
 }
 
@@ -1751,67 +1735,6 @@ test "decl literal function call" {
     });
 }
 
-test "function call struct parameter completion" {
-    try testCompletion(
-        \\fn foo(s: struct {field: u32}) void {}
-        \\fn bar() void {
-        \\    foo(.<cursor>);
-        \\}
-    , &.{
-        .{ .label = "field", .kind = .Field, .detail = "u32" },
-    });
-    try testCompletion(
-        \\fn foo(s: struct {field: u32}) void {}
-        \\fn bar() void {
-        \\    foo(.{.<cursor>);
-        \\}
-    , &.{
-        .{ .label = "field", .kind = .Field, .detail = "u32" },
-    });
-    try testCompletion(
-        \\fn foo(s: ?struct {field: u32}) void {}
-        \\fn bar() void {
-        \\    foo(.<cursor>);
-        \\}
-    , &.{
-        .{ .label = "field", .kind = .Field, .detail = "u32" },
-    });
-    try testCompletion(
-        \\fn foo(s: ?struct {field: u32}) void {}
-        \\fn bar() void {
-        \\    foo(.{.<cursor>);
-        \\}
-    , &.{
-        .{ .label = "field", .kind = .Field, .detail = "u32" },
-    });
-    try testCompletion(
-        \\fn foo(s: *const struct {field: u32}) void {}
-        \\fn bar() void {
-        \\    foo(.<cursor>);
-        \\}
-    , &.{
-        // While the completion won't actually result in code that will compile due to creating not a pointer
-        // This will still assist user in actually writing code - the compiler will do the rest.
-        .{ .label = "field", .kind = .Field, .detail = "u32" },
-    });
-    try testCompletion(
-        \\fn foo(s: *const struct {field: u32}) void {}
-        \\fn bar() void {
-        \\    foo(.{.<cursor>);
-        \\}
-    , &.{
-        .{ .label = "field", .kind = .Field, .detail = "u32" },
-    });
-    try testCompletion(
-        \\fn foo(s: *const struct {field: u32}) void {}
-        \\fn bar() void {
-        \\    foo(&.<cursor>);
-        \\}
-    , &.{
-        .{ .label = "field", .kind = .Field, .detail = "u32" },
-    });
-}
-
 test "enum literal" {
     try testCompletion(
         \\const literal = .foo;
@@ -1838,44 +1761,6 @@ test "tagged union" {
     , &.{
         .{ .label = "alpha", .kind = .EnumMember },
         .{ .label = "beta", .kind = .Field },
-    });
-}
-
-test "tagged union - tag" {
-    try testCompletion(
-        \\const std = @import("std");
-        \\const Ue = union(enum) {
-        \\    alpha,
-        \\    beta: []const u8,
-        \\};
-        \\const foo: std.meta.Tag(Ue) = .<cursor>
-    , &.{
-        .{ .label = "alpha", .kind = .EnumMember, .detail = "@typeInfo(Ue).@\"union\".tag_type.?" },
-        .{ .label = "beta", .kind = .EnumMember, .detail = "@typeInfo(Ue).@\"union\".tag_type.?" },
-    });
-    try testCompletion(
-        \\const std = @import("std");
-        \\const Ue = union(enum) {
-        \\    alpha,
-        \\    beta: []const u8,
-        \\};
-        \\const S = struct { foo: std.meta.Tag(Ue) };
-        \\const s = S{ .foo = .<cursor> };
-    , &.{
-        .{ .label = "alpha", .kind = .EnumMember, .detail = "@typeInfo(Ue).@\"union\".tag_type.?" },
-        .{ .label = "beta", .kind = .EnumMember, .detail = "@typeInfo(Ue).@\"union\".tag_type.?" },
-    });
-}
-
-test "tagged union - unknown field type" {
-    try testCompletion(
-        \\const UnknownType: type;
-        \\const U = union(enum) {
-        \\    alpha: UnknownType,
-        \\};
-        \\const foo: U = .<cursor>
-    , &.{
-        .{ .label = "alpha", .kind = .Field },
     });
 }
 
@@ -2631,67 +2516,6 @@ test "structinit - fields with and without default value" {
     });
 }
 
-test "structinit - anonymous" {
-    try testCompletion(
-        \\fn foo() E {
-        \\    const foo2: struct { alpha: u32 } = .a<cursor>
-        \\}
-    , &.{
-        .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-    });
-    try testCompletion(
-        \\var foo: struct { alpha: u32 } = undefined;
-        \\foo = .<cursor>
-    , &.{
-        .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-    });
-    // try testCompletion(
-    //     \\fn foo() E {
-    //     \\    const foo2: struct { alpha: u32 } = .{.<cursor>
-    //     \\}
-    // , &.{
-    //     .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-    // });
-    // try testCompletion(
-    //     \\fn foo() E {
-    //     \\    const foo2: struct { alpha: u32 } = .<cursor>
-    //     \\}
-    // , &.{
-    //     .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-    // });
-    // try testCompletion(
-    //     \\const foo2: struct { alpha: u32 } = .a<cursor>
-    // , &.{
-    //     .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-    // });
-}
-
-test "structinit - address of" {
-    try testCompletion(
-        \\const T = struct { a: u32 };
-        \\var t: ?*const T = &.<cursor>
-    , &.{
-        .{ .label = "a", .kind = .Field, .detail = "u32" },
-    });
-    try testCompletion(
-        \\const T = struct { a: u32 };
-        \\var t: ?*const T = undefined;
-        \\t = &.<cursor>
-    , &.{
-        .{ .label = "a", .kind = .Field, .detail = "u32" },
-    });
-    // try testCompletion(
-    //     \\var t: *const struct { a: u32 } = &.<cursor>
-    // , &.{
-    //     .{ .label = "a", .kind = .Field, .detail = "u32" },
-    // });
-    // try testCompletion(
-    //     \\var t: ?*const struct { a: u32 } = &.<cursor>
-    // , &.{
-    //     .{ .label = "a", .kind = .Field, .detail = "u32" },
-    // });
-}
-
 test "return - enum" {
     try testCompletion(
         \\const E = enum {
@@ -3074,8 +2898,8 @@ test "declarations" {
         \\const foo: S = undefined;
         \\const bar = foo.<cursor>
     , &.{
-        .{ .label = "public", .kind = .Method, .detail = "fn (self: S) S" },
-        .{ .label = "private", .kind = .Method, .detail = "fn (self: S) !void" },
+        .{ .label = "public", .kind = .Function, .detail = "fn (self: S) S" },
+        .{ .label = "private", .kind = .Function, .detail = "fn (self: S) !void" },
     });
 }
 
@@ -3159,46 +2983,6 @@ test "function taking a generic struct arg" {
     , &.{
         .{ .label = "field", .kind = .Field, .detail = "u8" },
     });
-}
-
-test "function taking an anonymous struct arg" {
-    try testCompletion(
-        \\const Foo = struct {
-        \\   alpha: u32,
-        \\   fn init(opts: struct {alpha: u32}) Foo {
-        \\       return .{ .alpha = opts.alpha };
-        \\   }
-        \\};
-        \\const bar: Foo = .init(.{ .a<cursor> });
-    , &.{
-        .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-    });
-
-    try testCompletion(
-        \\const Foo = struct {
-        \\   alpha: u32,
-        \\   fn init(opts: struct {alpha: u32}) Foo {
-        \\       return .{ .alpha = opts.alpha };
-        \\   }
-        \\};
-        \\const bar: Foo = .init(.a<cursor>);
-    , &.{
-        .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-    });
-
-    // // Not working due to parser limitations because the init function call is invalid syntax, ".init" is evaluated
-    // // as primitive value instead of a function call.
-    // try testCompletion(
-    //     \\const Foo = struct {
-    //     \\   alpha: u32,
-    //     \\   fn init(opts: struct {alpha: u32}) Foo {
-    //     \\       return .{ .alpha = opts.alpha };
-    //     \\   }
-    //     \\};
-    //     \\const bar: Foo = .init(.<cursor>);
-    // , &.{
-    //     .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-    // });
 }
 
 test "anytype resolution based on callsite-references" {
@@ -3363,7 +3147,7 @@ test "builtin fns return type" {
         .{ .label = "null", .kind = .Field, .detail = "void" },
         .{ .label = "optional", .kind = .Field, .detail = "Optional" },
         .{ .label = "error_union", .kind = .Field, .detail = "ErrorUnion" },
-        .{ .label = "error_set", .kind = .Field, .detail = "ErrorSet" },
+        .{ .label = "error_set", .kind = .Field, .detail = "?[]const Error" },
         .{ .label = "@\"enum\"", .kind = .Field, .detail = "Enum" },
         .{ .label = "@\"union\"", .kind = .Field, .detail = "Union" },
         .{ .label = "@\"fn\"", .kind = .Field, .detail = "Fn" },
@@ -3372,7 +3156,6 @@ test "builtin fns return type" {
         .{ .label = "@\"anyframe\"", .kind = .Field, .detail = "AnyFrame" },
         .{ .label = "vector", .kind = .Field, .detail = "Vector" },
         .{ .label = "enum_literal", .kind = .Field, .detail = "void" },
-        .{ .label = "spirv", .kind = .Field, .detail = "Spirv" },
     });
 }
 
@@ -3429,7 +3212,7 @@ test "function arguments of @Struct" {
         \\}
     , &.{
         .{ .label = "@\"extern\"", .kind = .EnumMember },
-        .{ .label = "@\"bitpack\"", .kind = .EnumMember },
+        .{ .label = "@\"packed\"", .kind = .EnumMember },
         .{ .label = "auto", .kind = .EnumMember },
     });
 }
@@ -3441,7 +3224,7 @@ test "function arguments of @Union" {
         \\}
     , &.{
         .{ .label = "@\"extern\"", .kind = .EnumMember },
-        .{ .label = "@\"bitpack\"", .kind = .EnumMember },
+        .{ .label = "@\"packed\"", .kind = .EnumMember },
         .{ .label = "auto", .kind = .EnumMember },
     });
 }
@@ -3659,7 +3442,7 @@ test "either" {
         \\const bar = foo.<cursor>
     , &.{
         .{ .label = "field", .kind = .Field, .detail = "u32" },
-        .{ .label = "alpha", .kind = .Method, .detail = "fn (_: Alpha) void" },
+        .{ .label = "alpha", .kind = .Function, .detail = "fn (_: Alpha) void" },
         .{ .label = "beta", .kind = .Method, .detail = "fn (_: Beta) void" },
     });
     try testCompletion(
@@ -3676,7 +3459,7 @@ test "either" {
         \\const foo = gamma.<cursor>
     , &.{
         .{ .label = "field", .kind = .Field, .detail = "u32" },
-        .{ .label = "alpha", .kind = .Method, .detail = "fn (_: Alpha) void" },
+        .{ .label = "alpha", .kind = .Function, .detail = "fn (_: Alpha) void" },
         .{ .label = "beta", .kind = .Method, .detail = "fn (_: Beta) void" },
     });
 
@@ -3782,9 +3565,6 @@ test "integer overflow in dot completions at beginning of file" {
     try testCompletion(
         \\.<cursor>
     , &.{});
-    try testCompletion(
-        \\=&.<cursor>
-    , &.{});
 }
 
 test "enum completion on out of bound parameter index" {
@@ -3849,28 +3629,6 @@ test "top-level doc comment" {
             \\
             \\B
             ,
-        },
-    });
-}
-
-test "empty doc comment" {
-    try testCompletion(
-        \\///
-        \\const foo<cursor> = 5;
-    , &.{
-        .{
-            .label = "foo",
-            .kind = .Constant,
-        },
-    });
-    try testCompletion(
-        \\///
-        \\const foo<cursor> = 5;
-    , &.{
-        .{
-            .label = "foo",
-            .kind = .Constant,
-            .documentation = "",
         },
     });
 }
@@ -4864,7 +4622,7 @@ test "generic function with @This() as self param" {
     , &.{
         .{
             .label = "bar",
-            .kind = .Method,
+            .kind = .Function,
             .detail = "fn (_: *const Foo, comptime _: type) void",
         },
     });
@@ -4887,12 +4645,12 @@ test "methods of branching type" {
     , &.{
         .{
             .label = "foo",
-            .kind = .Method,
+            .kind = .Function,
             .detail = "fn (_: *either type) bool",
         },
         .{
             .label = "bar",
-            .kind = .Method,
+            .kind = .Function,
             .detail = "fn (_: *either type) bool",
         },
     });
@@ -5048,7 +4806,6 @@ fn testCompletionWithOptions(
             } else null;
 
             if (actual_doc != null and std.mem.eql(u8, expected_doc, actual_doc.?)) break :doc_blk;
-            if (actual_doc == null and expected_doc.len == 0) break :doc_blk;
 
             try error_builder.msgAtIndex("completion item '{s}' should have doc '{f}' but was '{?f}'!", test_uri.raw, cursor_idx, .err, .{
                 label,
@@ -5057,9 +4814,8 @@ fn testCompletionWithOptions(
             });
             return error.InvalidCompletionDoc;
         } else blk: {
-            const actual_doc = actual_completion.documentation orelse break :blk;
-            std.debug.assert(actual_doc.markup_content.value.len > 0); // the whole documentation field should be set to null instead
             if (!options.check_null_fields) break :blk;
+            const actual_doc = actual_completion.documentation orelse break :blk;
             try error_builder.msgAtIndex("completion item '{s}' has unexpected doc '{f}'", test_uri.raw, cursor_idx, .err, .{
                 label,
                 std.zig.fmtString(actual_doc.markup_content.value),

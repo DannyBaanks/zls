@@ -2,13 +2,14 @@
 //! - [`textDocument/declaration`](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_declaration)
 //! - [`textDocument/definition`](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition)
 //! - [`textDocument/typeDefinition`](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
+//! - [`textDocument/implementation`](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_implementation) (same behaviour as `textDocument/definition`)
 
 const std = @import("std");
+const log = std.log.scoped(.goto);
 
 const Server = @import("../Server.zig");
 const lsp = @import("lsp");
 const types = lsp.types;
-const ast = @import("../ast.zig");
 const offsets = @import("../offsets.zig");
 const Uri = @import("../Uri.zig");
 const tracy = @import("tracy");
@@ -16,29 +17,7 @@ const tracy = @import("tracy");
 const Analyser = @import("../analysis.zig");
 const DocumentStore = @import("../DocumentStore.zig");
 
-pub const Error = Analyser.Error || error{InvalidParams};
-
-pub fn @"textDocument/definition"(server: *Server, arena: std.mem.Allocator, request: types.Definition.Params) Error!?types.Definition.Result {
-    return try gotoHandler(server, arena, .definition, request);
-}
-pub fn @"textDocument/declaration"(server: *Server, arena: std.mem.Allocator, request: types.declaration.Params) Error!?types.Definition.Result {
-    return try gotoHandler(server, arena, .declaration, .{
-        .textDocument = request.textDocument,
-        .position = request.position,
-        .workDoneToken = request.workDoneToken,
-        .partialResultToken = request.partialResultToken,
-    });
-}
-pub fn @"textDocument/typeDefinition"(server: *Server, arena: std.mem.Allocator, request: types.type_definition.Params) Error!?types.Definition.Result {
-    return try gotoHandler(server, arena, .type_definition, .{
-        .textDocument = request.textDocument,
-        .position = request.position,
-        .workDoneToken = request.workDoneToken,
-        .partialResultToken = request.partialResultToken,
-    });
-}
-
-const GotoKind = enum {
+pub const GotoKind = enum {
     declaration,
     definition,
     type_definition,
@@ -54,9 +33,9 @@ fn gotoDefinitionSymbol(
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 
-    const token_handle: Analyser.TokenWithHandle = switch (kind) {
-        .declaration => .{ .token = decl_handle.nameToken(), .handle = decl_handle.handle },
-        .definition => try decl_handle.definitionToken(analyser),
+    const token_handle = switch (kind) {
+        .declaration => try decl_handle.definitionToken(analyser, false),
+        .definition => try decl_handle.definitionToken(analyser, true),
         .type_definition => blk: {
             if (try decl_handle.resolveType(analyser)) |ty| {
                 var resolved_ty = ty;
@@ -145,13 +124,7 @@ fn gotoDefinitionStructInit(
     if (token + 1 >= handle.tree.tokens.len) return null;
     if (handle.tree.tokenTag(token + 1) != .l_brace) return null;
 
-    const ancestors = try ast.nodesOverlappingIndex(analyser.arena, &handle.tree, source_index);
-    const resolved_type = try analyser.resolveDeclLiteralExpressionType(
-        handle,
-        ancestors[0],
-        ancestors[1..],
-    ) orelse return null;
-
+    const resolved_type = try analyser.resolveStructInitType(handle, source_index) orelse return null;
     const token_handle = resolved_type.typeDefinitionToken() orelse return null;
     const target_range = offsets.tokenToRange(&token_handle.handle.tree, token_handle.token, offset_encoding);
     return .{
@@ -176,23 +149,8 @@ fn gotoDefinitionEnumLiteral(
         return gotoDefinitionStructInit(analyser, handle, source_index, kind, offset_encoding);
     };
     const name = offsets.locToSlice(handle.tree.source, name_loc);
-
-    const ancestors = try ast.nodesOverlappingIndex(analyser.arena, &handle.tree, source_index);
-
-    const decl, _ = try analyser.lookupSymbolFieldInit(
-        handle,
-        name,
-        ancestors[0],
-        ancestors[1..],
-    ) orelse return null;
-
-    return try gotoDefinitionSymbol(
-        analyser,
-        offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
-        decl,
-        kind,
-        offset_encoding,
-    );
+    const decl = (try analyser.getSymbolEnumLiteral(handle, source_index, name)) orelse return null;
+    return try gotoDefinitionSymbol(analyser, offsets.tokenToRange(&handle.tree, name_token, offset_encoding), decl, kind, offset_encoding);
 }
 
 fn gotoDefinitionBuiltin(
@@ -207,7 +165,30 @@ fn gotoDefinitionBuiltin(
     const tree = &handle.tree;
     const name_loc = offsets.tokenIndexToLoc(tree.source, loc.start);
     const name = offsets.locToSlice(tree.source, name_loc);
-    if (std.mem.eql(u8, name, "@This")) {
+    if (std.mem.eql(u8, name, "@cImport")) {
+        if (!DocumentStore.supports_build_system) return null;
+
+        const index = for (handle.cimports.items(.node), 0..) |cimport_node, index| {
+            const main_token = tree.nodeMainToken(cimport_node);
+            if (loc.start == tree.tokenStart(main_token)) break index;
+        } else return null;
+        const hash = handle.cimports.items(.hash)[index];
+
+        const result = analyser.store.cimports.get(hash) orelse return null;
+        const target_range: types.Range = .{
+            .start = .{ .line = 0, .character = 0 },
+            .end = .{ .line = 0, .character = 0 },
+        };
+        switch (result) {
+            .failure => return null,
+            .success => |uri| return .{
+                .originSelectionRange = offsets.locToRange(tree.source, name_loc, offset_encoding),
+                .targetUri = uri.raw,
+                .targetRange = target_range,
+                .targetSelectionRange = target_range,
+            },
+        }
+    } else if (std.mem.eql(u8, name, "@This")) {
         const ty = try analyser.innermostContainer(handle, name_loc.start);
         const definition = ty.typeDefinitionToken() orelse return null;
         const token_loc = offsets.tokenToLoc(tree, definition.token);
@@ -262,6 +243,8 @@ fn gotoDefinitionString(
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 
+    const io = document_store.io;
+
     const loc = pos_context.stringLiteralContentLoc(handle.tree.source);
     if (loc.start == loc.end) return null;
     const import_str = offsets.locToSlice(handle.tree.source, loc);
@@ -270,6 +253,25 @@ fn gotoDefinitionString(
         .import_string_literal,
         .embedfile_string_literal,
         => try document_store.uriFromImportStr(arena, handle, import_str),
+        .cinclude_string_literal => blk: {
+            if (!DocumentStore.supports_build_system) return null;
+
+            if (std.Io.Dir.path.isAbsolute(import_str)) {
+                break :blk .{ .one = try .fromPath(arena, import_str) };
+            }
+
+            var include_dirs: std.ArrayList([]const u8) = .empty;
+            _ = try document_store.collectIncludeDirs(arena, handle, &include_dirs);
+            for (include_dirs.items) |dir| {
+                const path = try std.Io.Dir.path.join(arena, &.{ dir, import_str });
+                std.Io.Dir.accessAbsolute(io, path, .{}) catch |err| switch (err) {
+                    error.Canceled => return error.Canceled,
+                    else => continue,
+                };
+                break :blk .{ .one = try .fromPath(arena, path) };
+            }
+            return null;
+        },
         else => unreachable,
     };
 
@@ -300,12 +302,12 @@ fn gotoDefinitionString(
     }
 }
 
-fn gotoHandler(
+pub fn gotoHandler(
     server: *Server,
     arena: std.mem.Allocator,
     kind: GotoKind,
     request: types.Definition.Params,
-) Error!?types.Definition.Result {
+) Server.Error!?types.Definition.Result {
     const document_uri = Uri.parse(arena, request.textDocument.uri) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidParams,
@@ -337,6 +339,7 @@ fn gotoHandler(
             }
         },
         .import_string_literal,
+        .cinclude_string_literal,
         .embedfile_string_literal,
         => {
             const links = try gotoDefinitionString(&server.document_store, arena, pos_context, handle, server.offset_encoding) orelse return null;
