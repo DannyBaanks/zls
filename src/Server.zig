@@ -57,6 +57,15 @@ pending_show_messages: std.ArrayList(types.window.ShowMessageParams) = .empty,
 client_capabilities: ClientCapabilities = .{},
 diagnostics_collection: DiagnosticsCollection,
 workspaces: std.ArrayList(Workspace) = .empty,
+/// ISY: build-on-save for Zig projects nested below a workspace folder that has no `build.zig`
+/// of its own (e.g. a monorepo opened at its root). Kept apart from `workspaces` because those
+/// mirror the client's folders and several code paths rely on their exact count.
+/// Ordered least- to most-recently used; capped at `max_nested_build_workspaces`.
+nested_build_workspaces: std.ArrayList(Workspace) = .empty,
+
+/// ISY: each nested workspace keeps one `zig build --watch` process alive (~50 MB idle measured
+/// on ZigGrep, 2026-11-17). Opening a file in a fifth project stops the least recently used one.
+const max_nested_build_workspaces = 4;
 
 // Code was based off of https://github.com/andersfr/zig-lsp/blob/master/server.zig
 
@@ -882,6 +891,106 @@ fn addWorkspace(server: *Server, uri: Uri) error{ Canceled, OutOfMemory }!void {
     log.info("added Workspace Folder: {s} ({d} files)", .{ uri.raw, file_count });
 }
 
+/// ISY: when `document_uri` lies in a workspace folder without a `build.zig`, start (or reuse)
+/// build-on-save for the nearest enclosing Zig project below that folder.
+/// Never climbs above the workspace folder and ignores package/cache dirs, so following
+/// go-to-definition into a dependency does not spawn a watcher there.
+fn ensureNestedBuildOnSave(server: *Server, document_uri: Uri) error{ Canceled, OutOfMemory }!void {
+    comptime std.debug.assert(BuildOnSaveSupport.isSupportedComptime());
+    if (server.config_manager.config.enable_build_on_save == false) return;
+
+    const allocator = server.allocator;
+    const path = std.Io.Dir.path;
+
+    const document_path = document_uri.toFsPath(allocator) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedScheme => return,
+    };
+    defer allocator.free(document_path);
+
+    const workspace_path: []u8 = for (server.workspaces.items) |workspace| {
+        const candidate = workspace.uri.toFsPath(allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UnsupportedScheme => continue,
+        };
+        if (isStrictlyInside(document_path, candidate)) break candidate;
+        allocator.free(candidate);
+    } else return;
+    defer allocator.free(workspace_path);
+
+    // A workspace with its own build.zig is already covered by upstream build-on-save.
+    if (try buildFileExists(server.io, workspace_path)) return;
+
+    var project_dir: []const u8 = path.dirname(document_path) orelse return;
+    while (true) {
+        if (!isStrictlyInside(project_dir, workspace_path)) return;
+        if (try buildFileExists(server.io, project_dir)) break;
+        project_dir = path.dirname(project_dir) orelse return;
+    }
+
+    var components = path.componentIterator(project_dir[workspace_path.len..]);
+    while (components.next()) |component| {
+        if (std.mem.eql(u8, component.name, "zig-pkg") or
+            std.mem.eql(u8, component.name, ".zig-cache") or
+            std.mem.eql(u8, component.name, "zig-out")) return;
+    }
+
+    const project_uri: Uri = try .fromPath(allocator, project_dir);
+    defer project_uri.deinit(allocator);
+
+    const nested = &server.nested_build_workspaces;
+    for (nested.items, 0..) |workspace, index| {
+        if (!workspace.uri.eql(project_uri)) continue;
+        nested.appendAssumeCapacity(nested.orderedRemove(index)); // mark most recently used
+        return;
+    }
+
+    var workspace: Workspace = try .init(server, project_uri);
+    errdefer workspace.deinit(allocator);
+    try workspace.refreshBuildOnSave(.{ .server = server, .restart = false });
+    if (workspace.build_on_save == null) {
+        // Not ready (e.g. zig not resolved yet) or disabled; retried on the next open.
+        workspace.deinit(allocator);
+        return;
+    }
+
+    if (nested.items.len == max_nested_build_workspaces) {
+        var evicted = nested.orderedRemove(0);
+        log.info("stopped nested Build-On-Save for '{s}' (limit {d})", .{ evicted.uri.raw, max_nested_build_workspaces });
+        evicted.deinit(allocator);
+    }
+    try nested.append(allocator, workspace);
+    log.info("started nested Build-On-Save for '{s}'", .{project_uri.raw});
+}
+
+/// True when `child` is below `parent` (not equal). Both are normalized absolute fs paths.
+fn isStrictlyInside(child: []const u8, parent: []const u8) bool {
+    if (child.len <= parent.len) return false;
+    if (!std.mem.startsWith(u8, child, parent)) return false;
+    return std.Io.Dir.path.isSep(child[parent.len]) or std.Io.Dir.path.isSep(parent[parent.len - 1]);
+}
+
+fn buildFileExists(io: std.Io, dir_path: []const u8) std.Io.Cancelable!bool {
+    var dir = std.Io.Dir.openDirAbsolute(io, dir_path, .{}) catch |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        else => return false,
+    };
+    defer dir.close(io);
+    dir.access(io, "build.zig", .{}) catch |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        else => return false,
+    };
+    return true;
+}
+
+test isStrictlyInside {
+    try std.testing.expect(isStrictlyInside("/repo/sub/main.zig", "/repo"));
+    try std.testing.expect(isStrictlyInside("/repo/sub", "/repo/"));
+    try std.testing.expect(!isStrictlyInside("/repo", "/repo"));
+    try std.testing.expect(!isStrictlyInside("/repository/main.zig", "/repo"));
+    try std.testing.expect(!isStrictlyInside("/other/main.zig", "/repo"));
+}
+
 fn removeWorkspace(server: *Server, uri: Uri) void {
     for (server.workspaces.items, 0..) |workspace, i| {
         if (workspace.uri.eql(uri)) {
@@ -1019,6 +1128,11 @@ pub fn resolveConfiguration(server: *Server) error{ Canceled, OutOfMemory }!void
                 .server = server,
                 .restart = should_restart,
             });
+        }
+        // ISY: nested watchers are recreated lazily (next didOpen) with the new configuration.
+        if (should_restart) {
+            for (server.nested_build_workspaces.items) |*workspace| workspace.deinit(server.allocator);
+            server.nested_build_workspaces.clearRetainingCapacity();
         }
     }
 
@@ -1161,6 +1275,10 @@ fn openDocumentHandler(server: *Server, arena: std.mem.Allocator, notification: 
     };
     try server.document_store.openLspSyncedDocument(document_uri, notification.textDocument.text);
     server.generateDiagnostics(server.document_store.getHandle(document_uri).?);
+
+    if (BuildOnSaveSupport.isSupportedComptime() and server.status == .initialized) {
+        try server.ensureNestedBuildOnSave(document_uri);
+    }
 }
 
 fn changeDocumentHandler(server: *Server, arena: std.mem.Allocator, notification: types.TextDocument.DidChangeParams) Error!void {
@@ -1217,6 +1335,9 @@ fn saveDocumentHandler(server: *Server, arena: std.mem.Allocator, notification: 
 
     if (BuildOnSaveSupport.isSupportedComptime()) {
         for (server.workspaces.items) |*workspace| {
+            workspace.sendManualWatchUpdate();
+        }
+        for (server.nested_build_workspaces.items) |*workspace| {
             workspace.sendManualWatchUpdate();
         }
     }
@@ -1724,6 +1845,8 @@ pub fn destroy(server: *Server) void {
     server.ip.deinit(server.allocator);
     for (server.workspaces.items) |*workspace| workspace.deinit(server.allocator);
     server.workspaces.deinit(server.allocator);
+    for (server.nested_build_workspaces.items) |*workspace| workspace.deinit(server.allocator);
+    server.nested_build_workspaces.deinit(server.allocator);
     server.diagnostics_collection.deinit();
     server.client_capabilities.deinit(server.allocator);
     for (server.pending_show_messages.items) |params| server.allocator.free(params.message);

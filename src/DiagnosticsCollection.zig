@@ -336,6 +336,25 @@ fn collectLspDiagnosticsForDocument(
             false,
         );
     }
+
+    dedupeDiagnostics(diagnostics);
+}
+
+/// ISY: one source file is analyzed once per artifact that imports it (exe, tests, benches),
+/// so build-on-save reports the same error N times. Keep the first of each
+/// (range, severity, message), preserving order. Lists are short; quadratic is fine.
+fn dedupeDiagnostics(diagnostics: *std.ArrayList(lsp.types.Diagnostic)) void {
+    var kept: usize = 0;
+    outer: for (diagnostics.items) |candidate| {
+        for (diagnostics.items[0..kept]) |existing| {
+            if (std.meta.eql(existing.range, candidate.range) and
+                existing.severity == candidate.severity and
+                std.mem.eql(u8, existing.message, candidate.message)) continue :outer;
+        }
+        diagnostics.items[kept] = candidate;
+        kept += 1;
+    }
+    diagnostics.shrinkRetainingCapacity(kept);
 }
 
 pub const collectLspDiagnosticsForDocumentTesting = if (@import("builtin").is_test) collectLspDiagnosticsForDocument else {};
@@ -563,6 +582,41 @@ test DiagnosticsCollection {
         try std.testing.expectEqualStrings("You Haven't Done Nothin'", diagnostics.items[0].message);
         try std.testing.expectEqualStrings("As", diagnostics.items[1].message);
     }
+}
+
+test "DiagnosticsCollection - same error from several artifacts is reported once" {
+    var arena_allocator: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    var collection: DiagnosticsCollection = .{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+    };
+    defer collection.deinit();
+
+    // exe and test artifacts both import the file and both report the same error,
+    // plus one error that only the test artifact sees.
+    var eb_exe = try createTestingErrorBundle(&.{.{ .message = "expected type 'u32'" }}, "");
+    defer eb_exe.deinit(std.testing.allocator);
+    var eb_test = try createTestingErrorBundle(&.{
+        .{ .message = "expected type 'u32'" },
+        .{ .message = "only in tests" },
+    }, "");
+    defer eb_test.deinit(std.testing.allocator);
+
+    const uri: Uri = try .fromPath(std.testing.allocator, testing_src_path);
+    defer uri.deinit(std.testing.allocator);
+
+    try collection.pushErrorBundle(@enumFromInt(16), 1, null, eb_exe);
+    try collection.pushErrorBundle(@enumFromInt(17), 1, null, eb_test);
+
+    var diagnostics: std.ArrayList(lsp.types.Diagnostic) = .empty;
+    try collection.collectLspDiagnosticsForDocument(uri, .@"utf-8", arena, &diagnostics);
+
+    try std.testing.expectEqual(2, diagnostics.items.len);
+    try std.testing.expectEqualStrings("expected type 'u32'", diagnostics.items[0].message);
+    try std.testing.expectEqualStrings("only in tests", diagnostics.items[1].message);
 }
 
 test "DiagnosticsCollection - compile_log_text" {
