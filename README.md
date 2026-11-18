@@ -60,9 +60,22 @@ Desde los commits de esta rama el foco se desplaza a:
   ZLS lo sintetiza para poder reportar errores de compilación al guardar.
 - **Deduplicación de diagnósticos**: evita que el mismo error se reporte
   múltiples veces en build-on-save.
+- **Coalescing de diagnósticos por corrida de build**: el runner de build-on-save
+  avisa cuando terminó la corrida (`cycle_finished`) y ZLS publica todos los
+  archivos actualizados una sola vez en vez de una vez por bundle. Medido en
+  `isy/e2e/build_on_save.py` (escenario `flat`): 2 notificaciones por corrida con
+  el mismo error antes, 1 ahora. Los estados intermedios de una corrida nunca se
+  publican.
+- **Requests `isy/*` para agentes**: `isy/fileOutline` (lista plana de
+  declaraciones con firma y líneas; carga el archivo del disco si no está
+  abierto), `isy/diagnosticsSummary` (conteos por severidad y por archivo) e
+  `isy/agentState` (watchers de build-on-save y su configuración). Los errores
+  llegan como respuesta JSON-RPC, nunca silencian el request.
 
-Estos cambios son **100 % aditivos** (442 líneas añadidas, 0 borradas) sobre
-ZLS 0.16.x. Ver `CONTRIBUTING.md` para detalles de cómo colaborar en este fork.
+Estos cambios son **aditivos sobre el código de ZLS 0.16.1** (rama base
+`5c182326`): 1287 líneas añadidas en 14 archivos; las 31 líneas eliminadas son
+del propio fork o del README/CONTRIBUTING reorientados al enfoque de agentes.
+Ver `CONTRIBUTING.md` para detalles de cómo colaborar en este fork.
 
 ## Instalación
 

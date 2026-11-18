@@ -460,6 +460,9 @@ pub fn main(init: process.Init.Minimal) !void {
             main_progress_node,
             &run,
         );
+        // Every error bundle of this cycle has been sent: mark the end so the
+        // server can publish all diagnostics of the cycle in one batch.
+        try serveCycleFinished(builder.graph.io, run.cycle);
 
         try w.update(gpa, step_stack.keys());
 
@@ -1556,6 +1559,31 @@ fn serveWatchErrorBundle(
         std.mem.asBytes(&error_bundle_header),
         std.mem.sliceAsBytes(error_bundle.extra),
         error_bundle.string_bytes,
+    };
+    writer.writeVecAll(&data) catch return file_writer.err.?;
+}
+
+fn serveCycleFinished(io: std.Io, cycle: u32) Io.File.Writer.Error!void {
+    var header: shared.ServerToClient.Header = .{
+        .tag = .cycle_finished,
+        .bytes_len = @sizeOf(shared.ServerToClient.CycleFinished),
+    };
+
+    var cycle_finished: shared.ServerToClient.CycleFinished = .{ .cycle = cycle };
+
+    const need_bswap = builtin.target.cpu.arch.endian() != .little;
+
+    if (need_bswap) {
+        std.mem.byteSwapAllFields(shared.ServerToClient.Header, &header);
+        std.mem.byteSwapAllFields(shared.ServerToClient.CycleFinished, &cycle_finished);
+    }
+
+    var file_writer = Io.File.stdout().writer(io, &.{});
+    const writer = &file_writer.interface;
+
+    var data = [_][]const u8{
+        std.mem.asBytes(&header),
+        std.mem.asBytes(&cycle_finished),
     };
     writer.writeVecAll(&data) catch return file_writer.err.?;
 }

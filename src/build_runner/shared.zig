@@ -40,6 +40,11 @@ pub const ServerToClient = struct {
         pub const Tag = enum(u32) {
             /// Body is an ErrorBundle.
             watch_error_bundle,
+            /// Body is a `CycleFinished`: the build run is over, every diagnostic
+            /// belonging to this cycle was already sent as `watch_error_bundle`.
+            /// Lets the server publish the whole cycle in one batch instead of
+            /// once per error bundle.
+            cycle_finished,
 
             _,
         };
@@ -54,6 +59,12 @@ pub const ServerToClient = struct {
         cycle: u32,
         extra_len: u32,
         string_bytes_len: u32,
+    };
+
+    /// Sent once a build run (cycle) completed. `cycle` matches the `cycle` of
+    /// the `ErrorBundle` messages that preceded it.
+    pub const CycleFinished = extern struct {
+        cycle: u32,
     };
 };
 

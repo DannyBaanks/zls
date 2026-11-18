@@ -3,7 +3,9 @@
 
 Scenarios (each runs zls on a fresh temp copy of fixtures/no_check_step):
   flat     workspace = the project, which declares no "check" step.
-           Expect the type error exactly once (synthetic check + dedupe) and no zig-out.
+           Expect the type error exactly once (synthetic check + dedupe) and no zig-out,
+           published in a single publishDiagnostics notification per build cycle even
+           though several artifacts fail and share the same source file.
   monorepo workspace = a folder WITHOUT build.zig holding the project in app/,
            a dependency package in zig-pkg/dep/ and a loose file in loose/.
            Expect the error for app/ (nested build-on-save), and NO watcher started
@@ -34,6 +36,8 @@ class Session:
         self.stdout: IO[bytes] = self.proc.stdout
         self.changed = threading.Condition()
         self.diagnostics: dict[str, list[str]] = {}
+        # every publishDiagnostics notification, in arrival order: (uri, messages)
+        self.notifications: list[tuple[str, list[str]]] = []
         self.logs: list[str] = []
         threading.Thread(target=self._reader, daemon=True).start()
         uri = workspace.as_uri()
@@ -61,7 +65,9 @@ class Session:
             method = message.get("method")
             with self.changed:
                 if method == "textDocument/publishDiagnostics":
-                    self.diagnostics[message["params"]["uri"]] = [d["message"] for d in message["params"]["diagnostics"]]
+                    messages = [d["message"] for d in message["params"]["diagnostics"]]
+                    self.diagnostics[message["params"]["uri"]] = messages
+                    self.notifications.append((message["params"]["uri"], messages))
                 elif method == "window/logMessage":
                     self.logs.append(message["params"]["message"])
                 self.changed.notify_all()
@@ -97,12 +103,19 @@ def flat(work: pathlib.Path) -> list[str]:
     session = Session(work)
     session.open(source)
     messages = session.wait_for_error(source, TIMEOUT)
+    time.sleep(1.0)  # let the whole build cycle settle before counting notifications
     session.close()
     failures = []
     if messages is None:
         failures.append(f"no build-on-save diagnostic within {TIMEOUT:.0f}s")
     elif messages.count(EXPECTED) != 1:
         failures.append(f"expected the error once, got {messages.count(EXPECTED)}: {messages}")
+    uri = source.as_uri()
+    notifications = sum(1 for u, m in session.notifications if u == uri and EXPECTED in m)
+    if notifications != 1:
+        failures.append(
+            f"expected exactly 1 notification carrying the error per build cycle "
+            f"(one publish per cycle, not one per failing artifact), got {notifications}")
     if (work / "zig-out").exists():
         failures.append("zig-out was created: the synthetic check built or installed a binary")
     return failures

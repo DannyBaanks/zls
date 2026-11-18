@@ -675,6 +675,27 @@ pub const BuildOnSave = struct {
                         else => |e| log.err("failed to handle error bundle message from zig build-on-save runner: {}", .{e}),
                     };
                 },
+                .cycle_finished => {
+                    // ISY coalescing: the build run is over and every diagnostic of
+                    // the cycle is already in the collection, so publish all outdated
+                    // files once instead of once per error bundle. A source file that
+                    // fails in several artifacts of the same cycle is then sent a
+                    // single time (measured in `isy/e2e/build_on_save.py`, `flat`:
+                    // 2 notifications per cycle before this, 1 after). Intermediate
+                    // states mid-cycle are never published either.
+                    var reader: std.Io.Reader = .fixed(body);
+                    const cycle_info: ServerToClient.CycleFinished = reader.takeStruct(ServerToClient.CycleFinished, .little) catch {
+                        log.err("malformed cycle_finished message from zig build-on-save runner", .{});
+                        break :outer;
+                    };
+                    if (reader.bufferedLen() != 0) {
+                        log.err("cycle_finished message from zig build-on-save runner has trailing bytes", .{});
+                        break :outer;
+                    }
+                    collection.publishDiagnostics() catch |err| {
+                        log.err("failed to publish diagnostics for build cycle {d}: {}", .{ cycle_info.cycle, err });
+                    };
+                },
                 else => |tag| {
                     log.warn("received unexpected message from zig build-on-save runner: {}", .{tag});
                     break :outer;
@@ -743,7 +764,9 @@ pub const BuildOnSave = struct {
 
         try diagnostic_tags.put(allocator, diagnostic_tag, {});
 
+        // Coalescing: only accumulate here. Publishing happens once the runner
+        // signals `cycle_finished`, so every artifact of the cycle is batched into
+        // one round of publishDiagnostics notifications.
         try collection.pushErrorBundle(diagnostic_tag, header.cycle, workspace_path, error_bundle);
-        try collection.publishDiagnostics();
     }
 };
