@@ -68,9 +68,14 @@ Desde los commits de esta rama el foco se desplaza a:
   publican.
 - **Requests `isy/*` para agentes**: `isy/fileOutline` (lista plana de
   declaraciones con firma y líneas; carga el archivo del disco si no está
-  abierto), `isy/diagnosticsSummary` (conteos por severidad y por archivo) e
+  abierto), `isy/diagnosticsSummary` (conteos por severidad y por archivo),
+  `isy/references` (referencias agrupadas por archivo, más usadas primero),
   `isy/agentState` (watchers de build-on-save y su configuración). Los errores
   llegan como respuesta JSON-RPC, nunca silencian el request.
+- **`workspace/symbol` partial match para queries cortas**: queries de 1-2
+  caracteres (normalizados) buscan coincidencia exacta del nombre (case-insensitive,
+  `_` ignorado) en vez de no devolver nada; permite encontrar símbolos de nombre
+  corto (`Io`, `Ab`) que el índice de trigrama no indexa.
 
 Estos cambios son **aditivos sobre el código de ZLS 0.16.1** (rama base
 `5c182326`): 1287 líneas añadidas en 14 archivos; las 31 líneas eliminadas son
