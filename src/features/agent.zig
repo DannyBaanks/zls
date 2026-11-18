@@ -39,7 +39,9 @@ pub fn handleIsyRequest(server: *Server, arena: std.mem.Allocator, request: lsp.
     } else if (std.mem.eql(u8, request.method, "isy/agentState")) {
         return try agentState(server, arena, request.params);
     }
-    log.warn("unknown isy request method '{s}'", .{request.method});
+    // Unknown `isy/*` methods answer `null` like any other unsupported custom
+    // method; only surface it when debugging the client side.
+    log.debug("unknown isy request method '{s}'", .{request.method});
     return null;
 }
 
@@ -67,12 +69,22 @@ fn fileOutline(server: *Server, arena: std.mem.Allocator, params: ?std.json.Valu
         else => return error.InvalidParams,
     };
 
-    const handle = server.document_store.getHandle(document_uri) orelse return error.RequestFailed;
-    if (handle.tree.mode == .zon) return .null;
+    // `getOrLoadHandle` reads the file from disk when it was never opened in an
+    // editor: an agent should be able to outline any workspace file without a
+    // `didOpen` round trip first.
+    const handle = try server.document_store.getOrLoadHandle(document_uri) orelse return error.RequestFailed;
+
+    var declarations: std.json.Array = try .initCapacity(arena, 0);
+    if (handle.tree.mode == .zon) {
+        // `documentSymbol` has no ZON symbol support; answer the uniform shape.
+        var root: std.json.ObjectMap = .empty;
+        try root.put(arena, "uri", .{ .string = document_uri.raw });
+        try root.put(arena, "declarations", .{ .array = declarations });
+        return .{ .object = root };
+    }
 
     const symbols = try document_symbol.getDocumentSymbols(arena, &handle.tree, server.offset_encoding);
 
-    var declarations: std.json.Array = .empty;
     try flattenSymbols(arena, &declarations, symbols, handle.tree.source, "");
 
     var root: std.json.ObjectMap = .empty;
@@ -107,15 +119,16 @@ fn flattenSymbols(
         try fields.put(arena, "end_line", .{ .integer = @intCast(symbol.range.end.line) });
         try fields.put(arena, "is_pub", .{ .bool = isPubHeuristic(source, symbol.selectionRange) });
 
-        try out.append(arena, .{ .object = fields });
+        try out.append(.{ .object = fields });
 
-        const child_container = if (symbol.children.len == 0) container else blk: {
+        const children = symbol.children orelse &.{};
+        const child_container = if (children.len == 0) container else blk: {
             break :blk if (container.len == 0)
                 symbol.name
             else
                 try std.fmt.allocPrint(arena, "{s}.{s}", .{ container, symbol.name });
         };
-        try flattenSymbols(arena, out, symbol.children, source, child_container);
+        try flattenSymbols(arena, out, children, source, child_container);
     }
 }
 
@@ -159,24 +172,24 @@ fn diagnosticsSummary(server: *Server, arena: std.mem.Allocator, params: ?std.js
     _ = params;
     const summary = try server.diagnostics_collection.summarizeDiagnostics(arena);
 
-    var files_json: std.json.Array = .empty;
+    var files_json: std.json.Array = try .initCapacity(arena, 0);
     for (summary.files) |file| {
         var file_obj: std.json.ObjectMap = .empty;
         try file_obj.put(arena, "uri", .{ .string = file.uri });
-        try file_obj.put(arena, "errors", .{ .integer = file.errors });
-        try file_obj.put(arena, "warnings", .{ .integer = file.warnings });
-        try file_obj.put(arena, "informations", .{ .integer = file.informations });
-        try file_obj.put(arena, "hints", .{ .integer = file.hints });
-        try files_json.append(arena, .{ .object = file_obj });
+        try file_obj.put(arena, "errors", .{ .integer = @intCast(file.errors) });
+        try file_obj.put(arena, "warnings", .{ .integer = @intCast(file.warnings) });
+        try file_obj.put(arena, "informations", .{ .integer = @intCast(file.informations) });
+        try file_obj.put(arena, "hints", .{ .integer = @intCast(file.hints) });
+        try files_json.append(.{ .object = file_obj });
     }
 
     var root: std.json.ObjectMap = .empty;
-    try root.put(arena, "file_count", .{ .integer = summary.file_count });
-    try root.put(arena, "total", .{ .integer = summary.total });
-    try root.put(arena, "errors", .{ .integer = summary.errors });
-    try root.put(arena, "warnings", .{ .integer = summary.warnings });
-    try root.put(arena, "informations", .{ .integer = summary.informations });
-    try root.put(arena, "hints", .{ .integer = summary.hints });
+    try root.put(arena, "file_count", .{ .integer = @intCast(summary.file_count) });
+    try root.put(arena, "total", .{ .integer = @intCast(summary.total) });
+    try root.put(arena, "errors", .{ .integer = @intCast(summary.errors) });
+    try root.put(arena, "warnings", .{ .integer = @intCast(summary.warnings) });
+    try root.put(arena, "informations", .{ .integer = @intCast(summary.informations) });
+    try root.put(arena, "hints", .{ .integer = @intCast(summary.hints) });
     try root.put(arena, "files", .{ .array = files_json });
     return .{ .object = root };
 }
@@ -189,17 +202,17 @@ fn diagnosticsSummary(server: *Server, arena: std.mem.Allocator, params: ?std.js
 fn agentState(server: *Server, arena: std.mem.Allocator, params: ?std.json.Value) Error!std.json.Value {
     _ = params;
 
-    var workspaces_json: std.json.Array = .empty;
+    var workspaces_json: std.json.Array = try .initCapacity(arena, 0);
     for (server.workspaces.items) |workspace| {
-        try workspaces_json.append(arena, .{ .object = try workspaceStateObject(arena, workspace) });
+        try workspaces_json.append(.{ .object = try workspaceStateObject(arena, workspace) });
     }
 
-    var nested_json: std.json.Array = .empty;
+    var nested_json: std.json.Array = try .initCapacity(arena, 0);
     for (server.nested_build_workspaces.items, 0..) |workspace, index| {
         var workspace_obj = try workspaceStateObject(arena, workspace);
         // least-recently used first, so index 0 is the next to be evicted
         try workspace_obj.put(arena, "lru_index", .{ .integer = @intCast(index) });
-        try nested_json.append(arena, .{ .object = workspace_obj });
+        try nested_json.append(.{ .object = workspace_obj });
     }
 
     const config = &server.config_manager.config;

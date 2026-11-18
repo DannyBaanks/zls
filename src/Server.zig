@@ -67,7 +67,7 @@ nested_build_workspaces: std.ArrayList(Workspace) = .empty,
 
 /// ISY: each nested workspace keeps one `zig build --watch` process alive (~50 MB idle measured
 /// on ZigGrep, 2026-11-17). Opening a file in a fifth project stops the least recently used one.
-const max_nested_build_workspaces = 4;
+pub const max_nested_build_workspaces = 4;
 
 // Code was based off of https://github.com/andersfr/zig-lsp/blob/master/server.zig
 
@@ -769,7 +769,7 @@ fn handleConfiguration(server: *Server, json: std.json.Value) error{ Canceled, O
     try server.resolveConfiguration();
 }
 
-const Workspace = struct {
+pub const Workspace = struct {
     uri: Uri,
     build_on_save: if (BuildOnSaveSupport.isSupportedComptime()) ?BuildOnSave else void,
     build_on_save_mode: if (BuildOnSaveSupport.isSupportedComptime()) ?enum { watch, manual } else void,
@@ -1999,8 +1999,23 @@ fn processMessage(server: *Server, arena: std.mem.Allocator, message: Message) E
             // dispatched to the agent extensions in `features/agent.zig`.
             .other => |custom| {
                 if (agent.isIsyMethod(custom.method)) {
-                    if (try agent.handleIsyRequest(server, arena, custom)) |result| {
-                        return try server.sendToClientResponse(request.id, result);
+                    if (agent.handleIsyRequest(server, arena, custom)) |result| {
+                        if (result) |response_result| {
+                            return try server.sendToClientResponse(request.id, response_result);
+                        }
+                    } else |err| {
+                        // Turn handler failures into JSON-RPC error responses:
+                        // propagating them would drop the request and leave the
+                        // client waiting for a response that never arrives.
+                        const code: lsp.JsonRPCMessage.Response.Error.Code = switch (err) {
+                            error.InvalidParams => .invalid_params,
+                            error.RequestFailed => @enumFromInt(@intFromEnum(lsp.types.LSPErrorCodes.RequestFailed)),
+                            else => return err,
+                        };
+                        return try server.sendToClientResponseError(request.id, .{
+                            .code = code,
+                            .message = @errorName(err),
+                        });
                     }
                 }
                 return try server.sendToClientResponse(request.id, @as(?void, null));

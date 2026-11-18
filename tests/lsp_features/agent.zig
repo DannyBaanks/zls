@@ -20,7 +20,7 @@ fn isyRequest(context: *Context, method: []const u8, params_json: []const u8) !s
     return std.json.parseFromSlice(std.json.Value, allocator, response_json, .{});
 }
 
-fn expectStr(comptime expected: []const u8, value: std.json.Value) !void {
+fn expectStr(expected: []const u8, value: std.json.Value) !void {
     try std.testing.expectEqualStrings(expected, value.string);
 }
 
@@ -28,7 +28,7 @@ fn expectBool(expected: bool, value: std.json.Value) !void {
     try std.testing.expect(expected == value.bool);
 }
 
-fn expectUint(expected: u64, value: std.json.Value) !void {
+fn expectUint(expected: i64, value: std.json.Value) !void {
     try std.testing.expectEqual(expected, value.integer);
 }
 
@@ -93,11 +93,13 @@ test "isy/fileOutline" {
 
     // const top = 1 and fn helper()
     const decl_top = declarations[3].object;
-    try expectStr("Constant", decl_top.get("name").?);
+    try expectStr("Constant", decl_top.get("kind").?);
+    try expectStr("top", decl_top.get("name").?);
     try expectBool(false, decl_top.get("is_pub").?);
 
     const decl_helper = declarations[4].object;
-    try expectStr("Function", decl_helper.get("name").?);
+    try expectStr("Function", decl_helper.get("kind").?);
+    try expectStr("helper", decl_helper.get("name").?);
     try expectBool(false, decl_helper.get("is_pub").?);
 }
 
@@ -116,6 +118,10 @@ test "isy/fileOutline for an unopened document" {
 test "isy/diagnosticsSummary" {
     var context: Context = try .init();
     defer context.deinit();
+
+    // `generateDiagnostics` only publishes when the client subscribed to
+    // `textDocument/publishDiagnostics`; opt in like a real diagnostics client.
+    context.server.client_capabilities.supports_publish_diagnostics = true;
 
     // clean document: nothing to report
     _ = try context.addDocument(.{
@@ -147,8 +153,8 @@ test "isy/diagnosticsSummary" {
     try expectUint(1, result.object.get("errors").?);
 
     const files = result.object.get("files").?.array.items;
-    try std.testing.expectEqual(@as(usize, 1), files.items.len);
-    try expectStr(broken.raw, files.items[0].object.get("uri").?);
+    try std.testing.expectEqual(@as(usize, 1), files.len);
+    try expectStr(broken.raw, files[0].object.get("uri").?);
 }
 
 test "isy/agentState" {

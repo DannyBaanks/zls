@@ -318,6 +318,7 @@ pub fn summarizeDiagnostics(
                 .Warning => file.warnings += 1,
                 .Information => file.informations += 1,
                 .Hint => file.hints += 1,
+                else => file.errors += 1,
             }
         }
         if (file.total() != 0) try files.append(arena, file);
