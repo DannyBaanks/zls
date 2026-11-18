@@ -1534,7 +1534,9 @@ fn hoverHandler(server: *Server, arena: std.mem.Allocator, request: types.Hover.
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidParams,
     };
-    const handle = server.document_store.getHandle(document_uri) orelse return null;
+    // ISY: load unopened files from disk so hover also works for files
+    // the client has not didOpen (consistent with references handler).
+    const handle = try server.document_store.getOrLoadHandle(document_uri) orelse return null;
     if (handle.tree.mode == .zon) return null;
     const source_index = offsets.positionToIndex(handle.tree.source, request.position, server.offset_encoding);
 
@@ -1558,7 +1560,9 @@ fn documentSymbolsHandler(server: *Server, arena: std.mem.Allocator, request: ty
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidParams,
     };
-    const handle = server.document_store.getHandle(document_uri) orelse return null;
+    // ISY: load unopened files from disk so documentSymbol also works for
+    // files the client has not didOpen (consistent with references/hover).
+    const handle = try server.document_store.getOrLoadHandle(document_uri) orelse return null;
     if (handle.tree.mode == .zon) return null;
     return .{
         .document_symbols = try document_symbol.getDocumentSymbols(arena, &handle.tree, server.offset_encoding),
