@@ -31,7 +31,7 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
         const trigram_store = handle.trigram_store.getCached();
 
         declaration_buffer.clearRetainingCapacity();
-        try trigram_store.declarationsForQuery(arena, request.query, &declaration_buffer);
+        try trigram_store.declarationsForQuery(arena, &handle.tree, request.query, &declaration_buffer);
 
         const SortContext = struct {
             names: []const std.zig.Ast.TokenIndex,

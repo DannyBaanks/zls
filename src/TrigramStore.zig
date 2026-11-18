@@ -205,6 +205,7 @@ pub fn deinit(store: *TrigramStore, allocator: std.mem.Allocator) void {
 pub fn declarationsForQuery(
     store: *const TrigramStore,
     allocator: std.mem.Allocator,
+    tree: *const Ast,
     query: []const u8,
     declaration_buffer: *std.ArrayList(Declaration.Index),
 ) error{OutOfMemory}!void {
@@ -223,7 +224,18 @@ pub fn declarationsForQuery(
 
     var ti: TrigramIterator = .init(query);
 
-    const first = (store.trigram_to_declarations.get(ti.next() orelse return) orelse return).items;
+    const first = (store.trigram_to_declarations.get(ti.next() orelse {
+        // ISY: the query normalizes to fewer than three characters, so it yields
+        // no trigram. Names shorter than three characters are not in the trigram
+        // index at all (`appendDeclaration` skips them), so a symbol named `Io`
+        // could never be found through `workspace/symbol`, and an agent could not
+        // tell "no such symbol" from "not searchable". Match those names exactly
+        // (case-insensitive, `_` ignored) instead of answering nothing: the
+        // candidate set is inherently tiny, so no full substring scan, no result
+        // flood for the 1-2 character queries human editors send per keystroke.
+        try appendShortNameMatches(store, tree, allocator, query, declaration_buffer);
+        return;
+    }) orelse return).items;
 
     try declaration_buffer.resize(allocator, first.len * 2);
 
@@ -299,6 +311,83 @@ fn appendOneTrigram(
 
     if (gop.value_ptr.getLastOrNull() != declaration_index) {
         try gop.value_ptr.append(allocator, declaration_index);
+    }
+}
+
+/// Extract the raw name from a declaration token, handling string literals and
+/// escaped identifiers (@foo) the same way `appendDeclaration` does.
+fn declarationNameSlice(tree: *const Ast, name_token: Ast.TokenIndex) []const u8 {
+    const raw = tree.tokenSlice(name_token);
+    return switch (tree.tokenTag(name_token)) {
+        .string_literal => raw[1 .. raw.len - 1],
+        .identifier => if (std.mem.startsWith(u8, raw, "@")) raw[2..] else raw,
+        else => unreachable,
+    };
+}
+
+/// Case-insensitive, underscore-ignoring equality for short (<=2 chars)
+/// normalized names. Used for queries that yield no trigram.
+fn normalizedEql(a: []const u8, b: []const u8) bool {
+    var ai: usize = 0;
+    var bi: usize = 0;
+    while (true) {
+        while (ai < a.len and a[ai] == '_') ai += 1;
+        while (bi < b.len and b[bi] == '_') bi += 1;
+        if (ai == a.len or bi == b.len) return ai == a.len and bi == b.len;
+        if (std.ascii.toLower(a[ai]) != std.ascii.toLower(b[bi])) return false;
+        ai += 1;
+        bi += 1;
+    }
+}
+
+/// ISY: linear scan for queries too short to yield a trigram (< 3 normalized chars).
+/// Matches declaration names that normalize exactly to the normalized query.
+/// Case-insensitive, underscores ignored. Returns exact-name matches only,
+/// avoiding the full substring scan and result flood that a substring search
+/// would cause on 1-2 character keystrokes.
+fn appendShortNameMatches(
+    store: *const TrigramStore,
+    tree: *const Ast,
+    allocator: std.mem.Allocator,
+    query: []const u8,
+    declaration_buffer: *std.ArrayList(Declaration.Index),
+) error{OutOfMemory}!void {
+    // Compute normalized query once (guaranteed len <= 2 by trigram logic).
+    var norm_query: [2]u8 = undefined;
+    var norm_len: usize = 0;
+    for (query) |c| {
+        if (c == '_') continue;
+        if (norm_len == norm_query.len) return; // query longer than 2 normalized chars shouldn't reach here
+        norm_query[norm_len] = std.ascii.toLower(c);
+        norm_len += 1;
+    }
+    if (norm_len == 0) return; // query was only underscores
+
+    const names: []const Ast.TokenIndex = store.declarations.slice().items(.name);
+    for (0..names.len) |i| {
+        const name_token = names[i];
+        const raw_name = declarationNameSlice(tree, name_token);
+
+        var qi: usize = 0;
+        var ri: usize = 0;
+        var match = true;
+        while (true) {
+            while (ri < raw_name.len and raw_name[ri] == '_') ri += 1;
+            if (qi == norm_len) {
+                // query consumed: must be end of name (or underscores only)
+                while (ri < raw_name.len and raw_name[ri] == '_') ri += 1;
+                if (ri == raw_name.len) break; // exact match
+                match = false;
+                break;
+            }
+            if (ri == raw_name.len) { match = false; break; }
+            if (std.ascii.toLower(raw_name[ri]) != norm_query[qi]) { match = false; break; }
+            ri += 1;
+            qi += 1;
+        }
+        if (match) {
+            try declaration_buffer.append(allocator, @enumFromInt(i));
+        }
     }
 }
 

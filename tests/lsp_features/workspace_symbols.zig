@@ -46,6 +46,14 @@ test "workspace symbols" {
         \\const PotatoDoctor = struct {};
     , .base_directory = "/farm/" });
 
+    // ISY: short-named symbols (normalized < 3 chars) were unsearchable via
+    // the trigram index; exact normalized match now works.
+    _ = try ctx.addDocument(.{ .source =
+        \\const Io = struct { value: u32 };
+        \\const I_o = 42;
+        \\fn io_fn() void {}
+    , .base_directory = "/animal_shelter/" });
+
     try testDocumentSymbol(&ctx, "Sal",
         \\Constant SalamanderCrab
         \\Function salamander_crab
@@ -69,6 +77,21 @@ test "workspace symbols" {
     try testDocumentSymbol(&ctx, "monke",
         \\Function evolveToMonke
     );
+
+    // Short name exact match (normalized query < 3 chars, underscore ignored)
+    try testDocumentSymbol(&ctx, "Io",
+        \\Constant Io
+        \\Constant I_o
+    );
+    try testDocumentSymbol(&ctx, "io",
+        \\Constant Io
+        \\Constant I_o
+    );
+    try testDocumentSymbol(&ctx, "io_fn",
+        \\Function io_fn
+    );
+    // Query "S" still returns nothing: no symbol is named exactly "s"
+    try testDocumentSymbol(&ctx, "S", "");
 }
 
 fn testDocumentSymbol(ctx: *Context, query: []const u8, expected: []const u8) !void {
