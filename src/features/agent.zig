@@ -7,6 +7,7 @@
 //!
 //! - `isy/fileOutline`: flat list of declarations with signatures and line spans
 //! - `isy/diagnosticsSummary`: counts by severity + files, worst first
+//! - `isy/references`: reference locations grouped by file, hottest first
 //! - `isy/agentState`: which projects have build-on-save watchers + config
 
 const std = @import("std");
@@ -15,6 +16,7 @@ const types = lsp.types;
 const Server = @import("../Server.zig");
 const Uri = @import("../Uri.zig");
 const document_symbol = @import("document_symbol.zig");
+const references = @import("references.zig");
 const log = std.log.scoped(.agent);
 
 const BuildOnSaveSupport = @import("../build_runner/shared.zig").BuildOnSaveSupport;
@@ -36,6 +38,8 @@ pub fn handleIsyRequest(server: *Server, arena: std.mem.Allocator, request: lsp.
         return try fileOutline(server, arena, request.params);
     } else if (std.mem.eql(u8, request.method, "isy/diagnosticsSummary")) {
         return try diagnosticsSummary(server, arena, request.params);
+    } else if (std.mem.eql(u8, request.method, "isy/references")) {
+        return try referencesGrouped(server, arena, request.params);
     } else if (std.mem.eql(u8, request.method, "isy/agentState")) {
         return try agentState(server, arena, request.params);
     }
@@ -192,6 +196,76 @@ fn diagnosticsSummary(server: *Server, arena: std.mem.Allocator, params: ?std.js
     try root.put(arena, "hints", .{ .integer = @intCast(summary.hints) });
     try root.put(arena, "files", .{ .array = files_json });
     return .{ .object = root };
+}
+
+/// One file in the grouped answer of `isy/references`.
+const FileReferenceGroup = struct {
+    uri: []const u8,
+    ranges: std.json.Array,
+};
+
+/// `isy/references` — params: `textDocument/references` params.
+///
+/// Same search as `textDocument/references`, but the answer is grouped by file
+/// so an agent can jump straight to the hottest file instead of bucketing N flat
+/// locations: `{ "total": 9, "files": [ { "uri": "file:///...", "count": 7,
+///   "ranges": [ { "line": 3, "character": 14, "end_line": 3, "end_character": 17 } ] } ] }`
+/// sorted by `count` descending, ties broken by uri ascending. Every range is
+/// nested inside the element it refers to, so a hit can occupy several lines.
+fn referencesGrouped(server: *Server, arena: std.mem.Allocator, params: ?std.json.Value) Error!std.json.Value {
+    const params_value = params orelse return error.InvalidParams;
+    const parsed = std.json.parseFromValueLeaky(types.reference.Params, arena, params_value, .{ .ignore_unknown_fields = true }) catch
+        return error.InvalidParams;
+
+    const response = references.referencesHandler(server, arena, .{ .references = parsed }) catch |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.RequestFailed,
+    } orelse return error.RequestFailed;
+    const locations = response.references;
+
+    var groups: std.ArrayList(FileReferenceGroup) = .empty;
+    var group_index: std.array_hash_map.String(usize) = .empty;
+
+    for (locations) |location| {
+        const gop = try group_index.getOrPut(arena, location.uri);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = groups.items.len;
+            try groups.append(arena, .{ .uri = location.uri, .ranges = try .initCapacity(arena, 0) });
+        }
+        try groups.items[gop.value_ptr.*].ranges.append(.{ .object = try rangeObject(arena, location.range) });
+    }
+
+    std.mem.sort(FileReferenceGroup, groups.items, {}, lessGroupCountThenUri);
+
+    var files_json: std.json.Array = try .initCapacity(arena, 0);
+    for (groups.items) |group| {
+        var file_obj: std.json.ObjectMap = .empty;
+        try file_obj.put(arena, "uri", .{ .string = group.uri });
+        try file_obj.put(arena, "count", .{ .integer = @intCast(group.ranges.items.len) });
+        try file_obj.put(arena, "ranges", .{ .array = group.ranges });
+        try files_json.append(.{ .object = file_obj });
+    }
+
+    var root: std.json.ObjectMap = .empty;
+    try root.put(arena, "total", .{ .integer = @intCast(locations.len) });
+    try root.put(arena, "files", .{ .array = files_json });
+    return .{ .object = root };
+}
+
+fn rangeObject(arena: std.mem.Allocator, range: types.Range) Error!std.json.ObjectMap {
+    var object: std.json.ObjectMap = .empty;
+    try object.put(arena, "line", .{ .integer = @intCast(range.start.line) });
+    try object.put(arena, "character", .{ .integer = @intCast(range.start.character) });
+    try object.put(arena, "end_line", .{ .integer = @intCast(range.end.line) });
+    try object.put(arena, "end_character", .{ .integer = @intCast(range.end.character) });
+    return object;
+}
+
+/// More references first; ties by uri so the answer is deterministic.
+fn lessGroupCountThenUri(_: void, a: FileReferenceGroup, b: FileReferenceGroup) bool {
+    if (a.ranges.items.len != b.ranges.items.len) return a.ranges.items.len > b.ranges.items.len;
+    return std.mem.lessThan(u8, a.uri, b.uri);
 }
 
 /// `isy/agentState` — params: ignored (may be empty).

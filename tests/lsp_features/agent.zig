@@ -157,6 +157,93 @@ test "isy/diagnosticsSummary" {
     try expectStr(broken.raw, files[0].object.get("uri").?);
 }
 
+test "isy/references groups by file" {
+    var context: Context = try .init();
+    defer context.deinit();
+
+    const uri = try context.addDocument(.{
+        .source =
+        \\const foo = 1;
+        \\const bar = foo + foo;
+        \\
+    ,
+    });
+
+    const uri_params = try std.fmt.allocPrint(allocator, "{{\"textDocument\":{{\"uri\":\"{s}\"}},\"position\":{{\"line\":0,\"character\":6}},\"context\":{{\"includeDeclaration\":true}}}}", .{uri.raw});
+    defer allocator.free(uri_params);
+
+    var response = try isyRequest(&context, "isy/references", uri_params);
+    defer response.deinit();
+
+    const result = response.value.object.get("result").?;
+    try expectUint(3, result.object.get("total").?);
+
+    const files = result.object.get("files").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), files.len);
+    try expectStr(uri.raw, files[0].object.get("uri").?);
+    try expectUint(3, files[0].object.get("count").?);
+
+    const ranges = files[0].object.get("ranges").?.array.items;
+    try std.testing.expectEqual(@as(usize, 3), ranges.len);
+    // declaration first, then both uses
+    try expectUint(0, ranges[0].object.get("line").?);
+    try expectUint(6, ranges[0].object.get("character").?);
+    try expectUint(9, ranges[0].object.get("end_character").?);
+    try expectUint(1, ranges[1].object.get("line").?);
+    try expectUint(12, ranges[1].object.get("character").?);
+    try expectUint(1, ranges[2].object.get("line").?);
+    try expectUint(18, ranges[2].object.get("character").?);
+}
+
+test "isy/references groups across files, hottest first" {
+    var context: Context = try .init();
+    defer context.deinit();
+
+    const decl_uri = try context.addDocument(.{
+        .source =
+        \\pub const Foo = struct {};
+        \\
+    ,
+    });
+    const uses_uri = try context.addDocument(.{
+        .source =
+        \\const file = @import("Untitled-0.zig");
+        \\const a: file.Foo = undefined;
+        \\const b: file.Foo = undefined;
+        \\
+    ,
+    });
+
+    const uri_params = try std.fmt.allocPrint(allocator, "{{\"textDocument\":{{\"uri\":\"{s}\"}},\"position\":{{\"line\":0,\"character\":10}},\"context\":{{\"includeDeclaration\":true}}}}", .{decl_uri.raw});
+    defer allocator.free(uri_params);
+
+    var response = try isyRequest(&context, "isy/references", uri_params);
+    defer response.deinit();
+
+    const result = response.value.object.get("result").?;
+    try expectUint(3, result.object.get("total").?);
+
+    const files = result.object.get("files").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), files.len);
+
+    // the file with 2 references comes first, the file with 1 reference second
+    try expectStr(uses_uri.raw, files[0].object.get("uri").?);
+    try expectUint(2, files[0].object.get("count").?);
+    const hot_ranges = files[0].object.get("ranges").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), hot_ranges.len);
+    try expectUint(1, hot_ranges[0].object.get("line").?);
+    try expectUint(14, hot_ranges[0].object.get("character").?);
+    try expectUint(17, hot_ranges[0].object.get("end_character").?);
+
+    try expectStr(decl_uri.raw, files[1].object.get("uri").?);
+    try expectUint(1, files[1].object.get("count").?);
+    const cold_ranges = files[1].object.get("ranges").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), cold_ranges.len);
+    try expectUint(0, cold_ranges[0].object.get("line").?);
+    try expectUint(10, cold_ranges[0].object.get("character").?);
+    try expectUint(13, cold_ranges[0].object.get("end_character").?);
+}
+
 test "isy/agentState" {
     var context: Context = try .init();
     defer context.deinit();

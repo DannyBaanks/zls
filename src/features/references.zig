@@ -688,7 +688,12 @@ pub fn referencesHandler(server: *Server, arena: std.mem.Allocator, request: Gen
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidParams,
     };
-    const handle = server.document_store.getHandle(uri) orelse return null;
+    // ISY: load the document from disk when the client never opened it, so
+    // `textDocument/references` (and the `isy/references` grouping) also works for
+    // files an agent has not `didOpen`ed. The workspace candidate scan already uses
+    // `getOrLoadHandle` for the imported files, so this is consistent: previously
+    // a request on an unopened file answered `null` while its imports were loaded.
+    const handle = try server.document_store.getOrLoadHandle(uri) orelse return null;
     if (handle.tree.mode == .zon) return null;
 
     const source_index = offsets.positionToIndex(handle.tree.source, request.position(), server.offset_encoding);
