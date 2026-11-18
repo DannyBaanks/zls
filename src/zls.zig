@@ -25,6 +25,7 @@ pub const code_actions = @import("features/code_actions.zig");
 pub const completions = @import("features/completions.zig");
 pub const diagnostics = @import("features/diagnostics.zig");
 pub const document_symbol = @import("features/document_symbol.zig");
+pub const agent = @import("features/agent.zig");
 pub const folding_range = @import("features/folding_range.zig");
 pub const goto = @import("features/goto.zig");
 pub const hover = @import("features/hover.zig");

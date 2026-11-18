@@ -34,6 +34,8 @@ const goto = @import("features/goto.zig");
 const hover_handler = @import("features/hover.zig");
 const selection_range = @import("features/selection_range.zig");
 const diagnostics_gen = @import("features/diagnostics.zig");
+/// ISY: agent-oriented custom requests under the `isy/` method prefix.
+const agent = @import("features/agent.zig");
 
 const BuildOnSave = diagnostics_gen.BuildOnSave;
 const BuildOnSaveSupport = build_runner_shared.BuildOnSaveSupport;
@@ -1992,7 +1994,17 @@ fn processMessage(server: *Server, arena: std.mem.Allocator, message: Message) E
 
     switch (message) {
         .request => |request| switch (request.params) {
-            .other => return try server.sendToClientResponse(request.id, @as(?void, null)),
+            // ISY: methods outside the LSP spec arrive as `.other`. Unknown
+            // custom methods answer `null` as before; `isy/*` methods are
+            // dispatched to the agent extensions in `features/agent.zig`.
+            .other => |custom| {
+                if (agent.isIsyMethod(custom.method)) {
+                    if (try agent.handleIsyRequest(server, arena, custom)) |result| {
+                        return try server.sendToClientResponse(request.id, result);
+                    }
+                }
+                return try server.sendToClientResponse(request.id, @as(?void, null));
+            },
             inline else => |params, method| {
                 const result = try server.sendRequestSync(arena, @tagName(method), params);
                 return try server.sendToClientResponse(request.id, result);

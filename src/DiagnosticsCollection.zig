@@ -252,6 +252,103 @@ fn collectUrisFromErrorBundle(
     }
 }
 
+/// ISY: per-file diagnostic counts served by the `isy/diagnosticsSummary` request.
+pub const FileSummary = struct {
+    uri: []const u8,
+    errors: usize = 0,
+    warnings: usize = 0,
+    informations: usize = 0,
+    hints: usize = 0,
+
+    fn total(self: FileSummary) usize {
+        return self.errors + self.warnings + self.informations + self.hints;
+    }
+};
+
+/// ISY: workspace-wide diagnostic counts, worst file first.
+pub const DiagnosticsSummary = struct {
+    files: []FileSummary,
+    file_count: usize,
+    total: usize,
+    errors: usize,
+    warnings: usize,
+    informations: usize,
+    hints: usize,
+};
+
+/// ISY: read-only aggregation of every diagnostic currently held, using the same
+/// per-document collection path as `publishDiagnostics` (including the
+/// deduplication applied there), so counts match what an editor was shown.
+/// Does not consume `outdated_files` and does not emit anything.
+pub fn summarizeDiagnostics(
+    collection: *DiagnosticsCollection,
+    arena: std.mem.Allocator,
+) error{ Canceled, OutOfMemory }!DiagnosticsSummary {
+    const tracy_zone = tracy.trace(@src());
+    defer tracy_zone.end();
+
+    try collection.mutex.lock(collection.io);
+    defer collection.mutex.unlock(collection.io);
+
+    // Collect every file that has diagnostics from any source: single-document
+    // diagnostics pushed directly, and files referenced by error bundles
+    // (resolved with each tag's `src_base_path`).
+    var uri_set: Uri.ArrayHashMap(void) = .empty;
+    defer uri_set.deinit(arena);
+
+    for (collection.tag_set.values()) |entry| {
+        for (entry.diagnostics_set.keys()) |uri| {
+            try uri_set.ensureUnusedCapacity(arena, 1);
+            const duped_uri = try uri.dupe(arena);
+            if (uri_set.fetchPutAssumeCapacity(duped_uri, {})) |_| duped_uri.deinit(arena);
+        }
+        try collectUrisFromErrorBundle(arena, entry.error_bundle, entry.error_bundle_src_base_path, &uri_set);
+    }
+
+    var files: std.ArrayList(FileSummary) = .empty;
+
+    for (uri_set.keys()) |uri| {
+        var diagnostics: std.ArrayList(lsp.types.Diagnostic) = .empty;
+        try collection.collectLspDiagnosticsForDocument(uri, collection.offset_encoding, arena, &diagnostics);
+
+        var file: FileSummary = .{ .uri = uri.raw };
+        for (diagnostics.items) |diagnostic| {
+            switch (diagnostic.severity orelse .Error) {
+                .Error => file.errors += 1,
+                .Warning => file.warnings += 1,
+                .Information => file.informations += 1,
+                .Hint => file.hints += 1,
+            }
+        }
+        if (file.total() != 0) try files.append(arena, file);
+    }
+
+    std.mem.sort(FileSummary, files.items, {}, struct {
+        fn lessThan(_: void, a: FileSummary, b: FileSummary) bool {
+            return a.total() > b.total(); // worst file first
+        }
+    }.lessThan);
+
+    var summary: DiagnosticsSummary = .{
+        .files = files.items,
+        .file_count = files.items.len,
+        .total = 0,
+        .errors = 0,
+        .warnings = 0,
+        .informations = 0,
+        .hints = 0,
+    };
+    for (files.items) |file| {
+        summary.total += file.total();
+        summary.errors += file.errors;
+        summary.warnings += file.warnings;
+        summary.informations += file.informations;
+        summary.hints += file.hints;
+    }
+
+    return summary;
+}
+
 fn pathToUri(allocator: std.mem.Allocator, base_path: ?[]const u8, src_path: []const u8) error{OutOfMemory}!?Uri {
     if (std.Io.Dir.path.isAbsolute(src_path)) {
         return try .fromPath(allocator, src_path);
